@@ -341,23 +341,59 @@ const searchInput = document.getElementById('searchInput');
 const searchClear = document.getElementById('searchClear');
 const searchCard = document.getElementById('searchCard');
 
+// Per-site conversation→folder assignment maps. Stored under
+// `conversationFolders:{site}` so each site's id space stays isolated even
+// though folders themselves are cross-site.
+const ASSIGNMENT_KEYS = {
+    chatgpt: 'conversationFolders:chatgpt',
+    claude: 'conversationFolders:claude',
+    gemini: 'conversationFolders:gemini',
+};
+
+function loadAssignmentsBySite(cb) {
+    chrome.storage.local.get(Object.values(ASSIGNMENT_KEYS), (r) => {
+        const out = {};
+        for (const [siteName, key] of Object.entries(ASSIGNMENT_KEYS)) {
+            out[siteName] = (r[key] && typeof r[key] === 'object') ? r[key] : {};
+        }
+        cb(out);
+    });
+}
+
 let searchDebounce = null;
 function runSearch(query) {
     const trimmed = (query || '').trim();
-    if (!trimmed) {
+    const showResults = trimmed.length > 0 || activeFolderId !== null;
+    if (!showResults) {
         searchCard.setAttribute('data-has-query', 'false');
         return;
     }
     searchCard.setAttribute('data-has-query', 'true');
     if (typeof AIToolboxPure === 'undefined' || !AIToolboxPure.searchIndex) {
-        // Defensive: lib/pure.js failed to load. Don't crash the popup —
-        // just show a neutral empty state.
         renderSearchResults([]);
         return;
     }
     loadAllHistoryEntries((entries) => {
-        const results = AIToolboxPure.searchIndex(entries, trimmed, { limit: 10 });
-        renderSearchResults(results);
+        loadAssignmentsBySite((assignments) => {
+            // Folder filter happens BEFORE the text search so an active
+            // folder narrows the universe — searching a folder for a term
+            // only sees that folder's conversations.
+            const scoped = AIToolboxPure.filterEntriesByFolder(
+                entries, activeFolderId, assignments
+            );
+            let results;
+            if (trimmed) {
+                results = AIToolboxPure.searchIndex(scoped, trimmed, { limit: 10 });
+            } else {
+                // Folder-browse mode: show recent entries in the folder
+                // sorted by updatedAt, no scoring/snippet.
+                results = scoped
+                    .slice()
+                    .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+                    .slice(0, 20);
+            }
+            renderSearchResults(results);
+        });
     });
 }
 
@@ -379,3 +415,145 @@ if (searchInput) {
         }
     });
 }
+
+// --- Folders -------------------------------------------------------------
+// Cross-site folders (one folder may hold conversations from any of the
+// three AI services). Stage 2 ships display + create + select; assignment
+// from search results lands in stage 3.
+
+const FOLDERS_KEY = 'folders';
+const folderStrip = document.getElementById('folderStrip');
+const folderCreate = document.getElementById('folderCreate');
+const folderCreateInput = document.getElementById('folderCreateInput');
+const folderCreateColors = document.getElementById('folderCreateColors');
+const folderCreateConfirm = document.getElementById('folderCreateConfirm');
+const folderCreateCancel = document.getElementById('folderCreateCancel');
+
+let folders = [];
+let activeFolderId = null;
+let pendingCreateColor = null;
+
+function loadFolders(cb) {
+    chrome.storage.local.get(FOLDERS_KEY, (r) => {
+        folders = Array.isArray(r[FOLDERS_KEY]) ? r[FOLDERS_KEY] : [];
+        cb && cb();
+    });
+}
+
+function saveFolders() {
+    chrome.storage.local.set({ [FOLDERS_KEY]: folders });
+}
+
+function renderFolderStrip() {
+    if (!folderStrip) return;
+    const allActive = activeFolderId === null;
+    const chips = [
+        `<button type="button" class="folder-chip" data-folder-id=""
+                 data-active="${allActive}">All</button>`,
+    ];
+    for (const f of folders) {
+        const active = activeFolderId === f.id;
+        chips.push(`
+            <button type="button" class="folder-chip" data-folder-id="${escapeHtmlSafe(f.id)}"
+                    data-active="${active}">
+                <span class="folder-chip-dot" style="background:${escapeHtmlSafe(f.color)}"></span>
+                <span>${escapeHtmlSafe(f.name)}</span>
+            </button>
+        `);
+    }
+    chips.push(`
+        <button type="button" class="folder-chip folder-chip-add" id="folderAddBtn"
+                aria-label="New folder">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" stroke-width="2.4" stroke-linecap="round">
+                <path d="M12 5v14M5 12h14"/>
+            </svg>
+        </button>
+    `);
+    folderStrip.innerHTML = chips.join('');
+
+    folderStrip.querySelectorAll('[data-folder-id]').forEach((el) => {
+        el.addEventListener('click', () => {
+            const id = el.getAttribute('data-folder-id') || null;
+            activeFolderId = id;
+            renderFolderStrip();
+            // Re-run the current search query with the new folder filter.
+            runSearch(searchInput?.value ?? '');
+        });
+    });
+    document.getElementById('folderAddBtn')?.addEventListener('click', openCreateFolder);
+}
+
+function renderColorSwatches() {
+    if (!folderCreateColors) return;
+    const palette = AIToolboxPure?.FOLDER_COLORS ?? [];
+    folderCreateColors.innerHTML = palette.map(c => `
+        <button type="button" class="folder-color-swatch"
+                data-color="${escapeHtmlSafe(c)}"
+                data-selected="${pendingCreateColor === c}"
+                style="background:${escapeHtmlSafe(c)}"
+                aria-label="Color ${escapeHtmlSafe(c)}"></button>
+    `).join('');
+    folderCreateColors.querySelectorAll('.folder-color-swatch').forEach((el) => {
+        el.addEventListener('click', () => {
+            pendingCreateColor = el.getAttribute('data-color');
+            renderColorSwatches();
+        });
+    });
+}
+
+function openCreateFolder() {
+    pendingCreateColor = (AIToolboxPure?.FOLDER_COLORS ?? ['#007AFF'])[5];
+    folderCreateInput.value = '';
+    folderCreateConfirm.disabled = true;
+    folderCreate.setAttribute('data-open', 'true');
+    renderColorSwatches();
+    folderCreateInput.focus();
+}
+
+function closeCreateFolder() {
+    folderCreate.setAttribute('data-open', 'false');
+}
+
+function commitCreateFolder() {
+    const name = folderCreateInput.value.trim();
+    if (!name) return;
+    try {
+        folders = AIToolboxPure.createFolder(folders, name, pendingCreateColor);
+        saveFolders();
+        closeCreateFolder();
+        // Auto-select the just-created folder so the user immediately sees
+        // the filtered (empty for now) result set under it.
+        activeFolderId = folders[folders.length - 1].id;
+        renderFolderStrip();
+        runSearch(searchInput?.value ?? '');
+    } catch (err) {
+        // Defensive — UI should already prevent empty-name commits.
+        console.warn('[AIToolbox] folder create failed:', err.message);
+    }
+}
+
+if (folderCreateInput) {
+    folderCreateInput.addEventListener('input', () => {
+        folderCreateConfirm.disabled = !folderCreateInput.value.trim();
+    });
+    folderCreateInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !folderCreateConfirm.disabled) commitCreateFolder();
+        if (e.key === 'Escape') closeCreateFolder();
+    });
+    folderCreateConfirm.addEventListener('click', commitCreateFolder);
+    folderCreateCancel.addEventListener('click', closeCreateFolder);
+}
+
+loadFolders(renderFolderStrip);
+
+// React to folder writes from any source (other tabs of this popup are
+// rare but harmless — and future stages may write from content scripts).
+chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'local') return;
+    if (changes[FOLDERS_KEY]) {
+        folders = Array.isArray(changes[FOLDERS_KEY].newValue)
+            ? changes[FOLDERS_KEY].newValue : [];
+        renderFolderStrip();
+    }
+});

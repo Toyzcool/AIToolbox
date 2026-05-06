@@ -494,6 +494,140 @@
       color: var(--label-tertiary);
       line-height: 1.45;
     }
+
+    /* Folder chip strip — sits between the search box and the results, lets
+       users filter the result pool by topic-folder. Horizontal-scrolls when
+       too many folders to fit. */
+    .folder-strip {
+      display: flex;
+      gap: 6px;
+      margin-top: 12px;
+      padding-bottom: 4px;
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+    .folder-strip::-webkit-scrollbar { display: none; }
+
+    .folder-chip {
+      flex-shrink: 0;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 12px;
+      background: var(--fill-tertiary);
+      color: var(--label);
+      font-family: inherit;
+      font-size: 12.5px;
+      font-weight: 500;
+      letter-spacing: -0.01em;
+      border: none;
+      border-radius: var(--radius-pill);
+      cursor: pointer;
+      transition: background 0.12s ease, transform 0.08s ease;
+      white-space: nowrap;
+    }
+    .folder-chip:hover { background: var(--fill-quaternary); }
+    .folder-chip:active { transform: scale(0.97); }
+
+    .folder-chip[data-active="true"] {
+      background: var(--label);
+      color: var(--surface);
+    }
+    @media (prefers-color-scheme: dark) {
+      .folder-chip[data-active="true"] {
+        background: var(--surface);
+        color: var(--label);
+      }
+    }
+
+    .folder-chip-dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
+    .folder-chip-add {
+      padding: 6px 8px;
+      color: var(--label-secondary);
+    }
+
+    /* Create-folder inline dialog */
+    .folder-create {
+      margin-top: 10px;
+      padding: 10px;
+      background: var(--fill-quaternary);
+      border-radius: var(--radius-control);
+      display: none;
+    }
+    .folder-create[data-open="true"] { display: block; }
+
+    .folder-create-input {
+      width: 100%;
+      padding: 8px 10px;
+      background: var(--surface);
+      border: none;
+      border-radius: var(--radius-small);
+      color: var(--label);
+      font-family: inherit;
+      font-size: 13px;
+      letter-spacing: -0.01em;
+      outline: none;
+      transition: box-shadow 0.15s ease;
+    }
+    .folder-create-input:focus {
+      box-shadow: 0 0 0 2px rgba(0, 122, 255, 0.25);
+    }
+
+    .folder-create-colors {
+      display: flex;
+      gap: 6px;
+      margin-top: 8px;
+      flex-wrap: wrap;
+    }
+    .folder-color-swatch {
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      border: none;
+      cursor: pointer;
+      padding: 0;
+      transition: transform 0.1s ease, box-shadow 0.12s ease;
+    }
+    .folder-color-swatch:hover { transform: scale(1.1); }
+    .folder-color-swatch[data-selected="true"] {
+      box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--label);
+    }
+
+    .folder-create-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 6px;
+      margin-top: 10px;
+    }
+    .folder-create-btn {
+      padding: 7px 14px;
+      border: none;
+      border-radius: var(--radius-small);
+      font-family: inherit;
+      font-size: 12.5px;
+      font-weight: 500;
+      letter-spacing: -0.01em;
+      cursor: pointer;
+      transition: opacity 0.12s ease, background 0.12s ease;
+    }
+    .folder-create-btn.primary {
+      background: var(--system-blue);
+      color: #FFFFFF;
+    }
+    .folder-create-btn.primary:hover { background: var(--system-blue-pressed); }
+    .folder-create-btn.primary:disabled { opacity: 0.4; cursor: default; }
+    .folder-create-btn.secondary {
+      background: var(--fill-tertiary);
+      color: var(--label);
+    }
+    .folder-create-btn.secondary:hover { background: var(--fill-quaternary); }
   </style>
 </head>
 <body>
@@ -518,6 +652,18 @@
         </svg>
       </button>
     </div>
+    <div class="folder-strip" id="folderStrip"></div>
+
+    <div class="folder-create" id="folderCreate" data-open="false">
+      <input type="text" id="folderCreateInput" class="folder-create-input"
+             placeholder="Folder name…" maxlength="40" autocomplete="off">
+      <div class="folder-create-colors" id="folderCreateColors"></div>
+      <div class="folder-create-actions">
+        <button type="button" class="folder-create-btn secondary" id="folderCreateCancel">Cancel</button>
+        <button type="button" class="folder-create-btn primary" id="folderCreateConfirm" disabled>Create</button>
+      </div>
+    </div>
+
     <div class="search-results" id="searchResults"></div>
   </div>
 
