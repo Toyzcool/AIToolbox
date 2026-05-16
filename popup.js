@@ -286,29 +286,64 @@ function buildSiteBadge(entry) {
     return base;
 }
 
+// Cache of the most-recently-loaded assignments — refreshed on every search
+// run, used by per-result rendering to color the folder button.
+let lastAssignments = { chatgpt: {}, claude: {}, gemini: {} };
+
+function folderColorById(folderId) {
+    if (!folderId) return null;
+    const folder = folders.find(f => f.id === folderId);
+    return folder ? folder.color : null;
+}
+
 function renderSearchResults(results) {
     const container = document.getElementById('searchResults');
     if (!container) return;
     if (!results.length) {
-        container.innerHTML = `<div class="search-empty">No matches in your visited conversations.</div>`;
+        container.innerHTML = `<div class="search-empty">${
+            activeFolderId
+                ? 'No conversations in this folder yet.'
+                : 'No matches in your visited conversations.'
+        }</div>`;
         return;
     }
-    container.innerHTML = results.map(r => `
+    container.innerHTML = results.map(r => {
+        const assigned = (lastAssignments[r._site] || {})[r.id] || null;
+        const color = folderColorById(assigned);
+        const colorStyle = color ? `--folder-color:${escapeHtmlSafe(color)};` : '';
+        return `
         <div class="search-result" data-id="${escapeHtmlSafe(r.id)}" data-site="${escapeHtmlSafe(r._site)}">
-            <div class="search-result-meta">
-                <span class="search-result-site">${escapeHtmlSafe(buildSiteBadge(r))}</span>
-                <span class="search-result-title">${escapeHtmlSafe(r.title || 'Untitled')}</span>
+            <div class="search-result-main">
+                <div class="search-result-meta">
+                    <span class="search-result-site">${escapeHtmlSafe(buildSiteBadge(r))}</span>
+                    <span class="search-result-title">${escapeHtmlSafe(r.title || 'Untitled')}</span>
+                </div>
+                ${r.snippet ? `<div class="search-result-snippet">${escapeHtmlSafe(r.snippet)}</div>` : ''}
             </div>
-            ${r.snippet ? `<div class="search-result-snippet">${escapeHtmlSafe(r.snippet)}</div>` : ''}
+            <button type="button" class="search-result-folder-btn"
+                    data-assigned="${assigned ? 'true' : 'false'}"
+                    style="${colorStyle}"
+                    title="${assigned ? 'In folder' : 'Add to folder'}"
+                    aria-label="Folder">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="${assigned ? 'currentColor' : 'none'}"
+                     stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+                </svg>
+            </button>
         </div>
-    `).join('');
+    `;
+    }).join('');
 
     container.querySelectorAll('.search-result').forEach((el, idx) => {
-        el.addEventListener('click', () => {
-            // Pass the full result object through so site-specific URL
-            // builders (Gemini's /u/N/ prefix) can read auxiliary fields
-            // like accountIndex.
-            openConversation(results[idx]);
+        // Main area click → navigate to conversation. Folder button click
+        // is handled separately and stops propagation.
+        const main = el.querySelector('.search-result-main');
+        main.addEventListener('click', () => openConversation(results[idx]));
+
+        const folderBtn = el.querySelector('.search-result-folder-btn');
+        folderBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            openFolderPickerForResult(folderBtn, results[idx]);
         });
     });
 }
@@ -375,9 +410,7 @@ function runSearch(query) {
     }
     loadAllHistoryEntries((entries) => {
         loadAssignmentsBySite((assignments) => {
-            // Folder filter happens BEFORE the text search so an active
-            // folder narrows the universe — searching a folder for a term
-            // only sees that folder's conversations.
+            lastAssignments = assignments;
             const scoped = AIToolboxPure.filterEntriesByFolder(
                 entries, activeFolderId, assignments
             );
@@ -385,14 +418,211 @@ function runSearch(query) {
             if (trimmed) {
                 results = AIToolboxPure.searchIndex(scoped, trimmed, { limit: 10 });
             } else {
-                // Folder-browse mode: show recent entries in the folder
-                // sorted by updatedAt, no scoring/snippet.
                 results = scoped
                     .slice()
                     .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
                     .slice(0, 20);
             }
             renderSearchResults(results);
+        });
+    });
+}
+
+// --- Popover utilities ---------------------------------------------------
+// One reusable popover element; only one is open at a time. Items are
+// rendered fresh on every open so we don't need to track per-popover state.
+
+let currentPopover = null;
+
+function closePopover() {
+    if (!currentPopover) return;
+    currentPopover.remove();
+    currentPopover = null;
+    document.removeEventListener('mousedown', onDocMouseDownForPopover, true);
+}
+
+function onDocMouseDownForPopover(e) {
+    if (currentPopover && !currentPopover.contains(e.target)) {
+        closePopover();
+    }
+}
+
+// Position a popover so its top-right corner sits just below the trigger's
+// bottom-right corner; flips up if it would clip past the viewport.
+function positionPopover(popover, anchorEl) {
+    const anchor = anchorEl.getBoundingClientRect();
+    popover.style.visibility = 'hidden';
+    document.body.appendChild(popover);
+    const pop = popover.getBoundingClientRect();
+    let top = anchor.bottom + 6;
+    if (top + pop.height > window.innerHeight - 8) {
+        top = Math.max(8, anchor.top - pop.height - 6);
+    }
+    let left = anchor.right - pop.width;
+    if (left < 8) left = 8;
+    popover.style.top = `${top}px`;
+    popover.style.left = `${left}px`;
+    popover.style.visibility = '';
+}
+
+function openPopover(anchorEl, html) {
+    closePopover();
+    const popover = document.createElement('div');
+    popover.className = 'aitb-popover';
+    popover.innerHTML = html;
+    positionPopover(popover, anchorEl);
+    currentPopover = popover;
+    setTimeout(() => {
+        document.addEventListener('mousedown', onDocMouseDownForPopover, true);
+    }, 0);
+    return popover;
+}
+
+// --- Per-result folder picker -------------------------------------------
+
+function openFolderPickerForResult(anchorEl, entry) {
+    const currentFolderId = (lastAssignments[entry._site] || {})[entry.id] || null;
+    const items = [];
+    items.push(`
+        <button type="button" class="aitb-popover-item" data-folder-id=""
+                data-current="${currentFolderId === null}">
+            <span class="aitb-popover-dot" style="background:transparent;border:1px dashed var(--label-tertiary)"></span>
+            <span>No folder</span>
+        </button>
+    `);
+    if (folders.length) {
+        items.push('<div class="aitb-popover-separator"></div>');
+    }
+    for (const f of folders) {
+        items.push(`
+            <button type="button" class="aitb-popover-item" data-folder-id="${escapeHtmlSafe(f.id)}"
+                    data-current="${currentFolderId === f.id}">
+                <span class="aitb-popover-dot" style="background:${escapeHtmlSafe(f.color)}"></span>
+                <span>${escapeHtmlSafe(f.name)}</span>
+            </button>
+        `);
+    }
+    if (!folders.length) {
+        items.push('<div class="aitb-popover-separator"></div>');
+        items.push(`
+            <button type="button" class="aitb-popover-item" id="popoverNewFolder">
+                <span style="font-size:14px;line-height:1">+</span>
+                <span>New folder…</span>
+            </button>
+        `);
+    }
+    const popover = openPopover(anchorEl, items.join(''));
+
+    popover.querySelectorAll('[data-folder-id]').forEach((el) => {
+        el.addEventListener('click', () => {
+            const folderId = el.getAttribute('data-folder-id') || null;
+            assignEntryToFolder(entry, folderId);
+            closePopover();
+        });
+    });
+    const newBtn = popover.querySelector('#popoverNewFolder');
+    if (newBtn) {
+        newBtn.addEventListener('click', () => {
+            closePopover();
+            openCreateFolder();
+        });
+    }
+}
+
+function assignEntryToFolder(entry, folderId) {
+    const key = ASSIGNMENT_KEYS[entry._site];
+    if (!key) return;
+    chrome.storage.local.get(key, (r) => {
+        const current = (r[key] && typeof r[key] === 'object') ? r[key] : {};
+        const next = AIToolboxPure.assignConversation(current, entry.id, folderId);
+        chrome.storage.local.set({ [key]: next }, () => {
+            lastAssignments[entry._site] = next;
+            runSearch(searchInput?.value ?? '');
+        });
+    });
+}
+
+// --- Chip context menu (rename / recolor / delete) ----------------------
+
+function openChipContextMenu(anchorEl, folder) {
+    const colorRow = (AIToolboxPure?.FOLDER_COLORS ?? []).map(c => `
+        <button type="button" class="folder-color-swatch"
+                data-color="${escapeHtmlSafe(c)}"
+                data-selected="${folder.color === c}"
+                style="background:${escapeHtmlSafe(c)}"></button>
+    `).join('');
+    const popover = openPopover(anchorEl, `
+        <button type="button" class="aitb-popover-item" data-act="rename">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 20h9"/>
+                <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/>
+            </svg>
+            <span>Rename</span>
+        </button>
+        <div class="aitb-popover-separator"></div>
+        <div class="aitb-popover-colors">${colorRow}</div>
+        <div class="aitb-popover-separator"></div>
+        <button type="button" class="aitb-popover-item destructive" data-act="delete">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M3 6h18"/>
+                <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+                <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+            </svg>
+            <span>Delete folder</span>
+        </button>
+    `);
+
+    popover.querySelector('[data-act="rename"]').addEventListener('click', () => {
+        closePopover();
+        const next = window.prompt('Rename folder:', folder.name);
+        if (next === null) return;
+        const trimmed = next.trim();
+        if (!trimmed) return;
+        try {
+            folders = AIToolboxPure.renameFolder(folders, folder.id, trimmed);
+            saveFolders();
+            renderFolderStrip();
+            runSearch(searchInput?.value ?? '');
+        } catch (err) {
+            console.warn('[AIToolbox] rename failed:', err.message);
+        }
+    });
+
+    popover.querySelectorAll('.folder-color-swatch').forEach((el) => {
+        el.addEventListener('click', () => {
+            const c = el.getAttribute('data-color');
+            folders = AIToolboxPure.recolorFolder(folders, folder.id, c);
+            saveFolders();
+            renderFolderStrip();
+            runSearch(searchInput?.value ?? '');
+            closePopover();
+        });
+    });
+
+    popover.querySelector('[data-act="delete"]').addEventListener('click', () => {
+        closePopover();
+        if (!confirm(`Delete folder "${folder.name}"? This won't delete the conversations.`)) return;
+        // Cascade-clear assignments across all three sites in one pass.
+        chrome.storage.local.get(Object.values(ASSIGNMENT_KEYS), (r) => {
+            const assignmentsBySite = {};
+            for (const [siteName, key] of Object.entries(ASSIGNMENT_KEYS)) {
+                assignmentsBySite[siteName] = (r[key] && typeof r[key] === 'object') ? r[key] : {};
+            }
+            const result = AIToolboxPure.deleteFolder(folders, folder.id, assignmentsBySite);
+            folders = result.folders;
+            saveFolders();
+            const writes = {};
+            for (const [siteName, key] of Object.entries(ASSIGNMENT_KEYS)) {
+                writes[key] = result.assignments[siteName] || {};
+            }
+            chrome.storage.local.set(writes, () => {
+                lastAssignments = result.assignments;
+                if (activeFolderId === folder.id) activeFolderId = null;
+                renderFolderStrip();
+                runSearch(searchInput?.value ?? '');
+            });
         });
     });
 }
@@ -480,6 +710,16 @@ function renderFolderStrip() {
             // Re-run the current search query with the new folder filter.
             runSearch(searchInput?.value ?? '');
         });
+        // Right-click on a real folder chip (not "All") opens the manage
+        // menu — rename, recolor, delete.
+        const folderId = el.getAttribute('data-folder-id');
+        if (folderId) {
+            el.addEventListener('contextmenu', (e) => {
+                e.preventDefault();
+                const folder = folders.find(f => f.id === folderId);
+                if (folder) openChipContextMenu(el, folder);
+            });
+        }
     });
     document.getElementById('folderAddBtn')?.addEventListener('click', openCreateFolder);
 }

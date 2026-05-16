@@ -443,11 +443,45 @@
       border-radius: var(--radius-control);
       cursor: pointer;
       transition: background 0.12s ease, transform 0.08s ease;
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
     }
     .search-result:hover { background: var(--fill-tertiary); }
     .search-result:active { transform: scale(0.99); }
     .search-result + .search-result {
       margin-top: 4px;
+    }
+    .search-result-main {
+      flex: 1;
+      min-width: 0;
+    }
+    .search-result-folder-btn {
+      flex-shrink: 0;
+      align-self: center;
+      width: 28px;
+      height: 28px;
+      border: none;
+      background: transparent;
+      color: var(--label-tertiary);
+      border-radius: 50%;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      opacity: 0;
+      transition: background 0.12s ease, color 0.12s ease, opacity 0.12s ease;
+    }
+    .search-result:hover .search-result-folder-btn,
+    .search-result-folder-btn[data-assigned="true"] {
+      opacity: 1;
+    }
+    .search-result-folder-btn:hover { background: var(--fill-quaternary); color: var(--label); }
+    .search-result-folder-btn[data-assigned="true"] {
+      color: var(--folder-color, var(--system-blue));
+    }
+    .search-result-folder-btn[data-assigned="true"]:hover {
+      background: var(--fill-quaternary);
     }
     .search-result-meta {
       display: flex;
@@ -628,6 +662,75 @@
       color: var(--label);
     }
     .folder-create-btn.secondary:hover { background: var(--fill-quaternary); }
+
+    /* Popover menus — used both for the per-result folder picker and the
+       chip right-click menu. Single style, two purposes. */
+    .aitb-popover {
+      position: fixed;
+      z-index: 100;
+      min-width: 180px;
+      max-width: 260px;
+      padding: 4px;
+      background: var(--surface);
+      border-radius: var(--radius-control);
+      box-shadow:
+        0 0 0 0.5px rgba(0, 0, 0, 0.06),
+        0 8px 24px rgba(0, 0, 0, 0.18),
+        0 2px 6px rgba(0, 0, 0, 0.06);
+      font-size: 13px;
+      letter-spacing: -0.01em;
+      animation: aitb-pop-in 0.12s ease-out;
+    }
+    @keyframes aitb-pop-in {
+      from { opacity: 0; transform: translateY(-4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .aitb-popover-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      width: 100%;
+      padding: 8px 10px;
+      background: transparent;
+      border: none;
+      border-radius: var(--radius-small);
+      color: var(--label);
+      font: inherit;
+      text-align: left;
+      cursor: pointer;
+      transition: background 0.1s ease;
+    }
+    .aitb-popover-item:hover { background: var(--fill-tertiary); }
+    .aitb-popover-item[data-current="true"] {
+      font-weight: 600;
+    }
+    .aitb-popover-item[data-current="true"]::after {
+      content: '✓';
+      margin-left: auto;
+      color: var(--system-blue);
+    }
+    .aitb-popover-item.destructive { color: #FF3B30; }
+    .aitb-popover-item.destructive:hover { background: rgba(255, 59, 48, 0.1); }
+    .aitb-popover-separator {
+      height: 0.5px;
+      background: var(--separator);
+      margin: 4px 0;
+    }
+    .aitb-popover-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .aitb-popover-colors {
+      display: flex;
+      gap: 4px;
+      padding: 6px 10px;
+    }
+    .aitb-popover-colors .folder-color-swatch {
+      width: 22px;
+      height: 22px;
+    }
   </style>
 </head>
 <body>
